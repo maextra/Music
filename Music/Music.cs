@@ -4,15 +4,18 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using System.Linq;
 using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace Music
 {
     class Song
     {
         private static int idIncrement = -1;
+        
         public enum AllGenres
         {
-            Rock, Indie, Pop, Metal, Folk, Country, Jazz, Electronic, Blues, Classical, HipHop
+            Empty=0, Rock, Indie, Pop, Metal, Folk, Country, Jazz, Electronic, Blues, Classical, HipHop
         }
         public int Id { get; private set; }
         public StringBuilder Name { get; private set; }
@@ -96,38 +99,34 @@ namespace Music
         public TimeSpan Duration { get; private set; }
         public List<Song> Songs { get; private set; }
 
-        public Playlist(string name,List<Song> songs)
+        public Playlist(string playlistName,List<Song> playlistSongs)
         {
-            if (String.IsNullOrWhiteSpace(name))
+            if (String.IsNullOrWhiteSpace(playlistName))
             {
                 throw new ArgumentNullException("name", "Cannot be null or empty. ");
             }
-            if (name.Length > 256)
+            if (playlistName.Length > 256)
             {
                 throw new ArgumentOutOfRangeException("name", "Cannot be more than 256 symbols. ");
             }
-            if (songs.Count == 0)
+            if (playlistSongs.Count == 0)
             {
                 throw new ArgumentNullException("songs", "The count must be more than 0. ");
             }
             Id = ++idIncrement;
             Name = new StringBuilder() { Capacity = 256 };
-            Name.Append(name);
-            Songs = songs.Distinct().ToList();
+            Name.Append(playlistName);
+            Songs = playlistSongs.Distinct().ToList();
             Duration = Songs.Aggregate(new TimeSpan(), (current, song) => current + song.Duration);
         }
-        public List<Song> GetAllSongs()
+        public void ChangeName(string newPlaylistName)
         {
-            return Songs;
-        }
-        public void ChangeName(string newName)
-        {
-            if (String.IsNullOrWhiteSpace(newName))
+            if (String.IsNullOrWhiteSpace(newPlaylistName))
             {
                 throw new ArgumentNullException("name", "Cannot be null or empty. ");
             }
             Name.Clear();
-            Name.Append(newName);
+            Name.Append(newPlaylistName);
         }
         public void ShowSongsInfo()
         {
@@ -163,23 +162,23 @@ namespace Music
             Songs.AddRange(newSongs.Except(Songs.Intersect(newSongs)).Distinct());
             Duration = Songs.Aggregate(new TimeSpan(), (current, song) => current + song.Duration);
         }
-        public void DeleteSong(int id)
+        public void DeleteSong(int songId)
         {
-            if (Songs.Exists(s => s.Id == id))
+            if (Songs.Exists(s => s.Id == songId))
             {
-                Duration -= Songs.Single(s => s.Id == id).Duration;
-                Songs.RemoveAt(id);
+                Duration -= Songs.Single(s => s.Id == songId).Duration;
+                Songs.RemoveAt(songId);
             }
             else
             {
                 Console.WriteLine("This song doesn`t exist. ");
             }
         }
-        public void DeleteSongs(string name)
+        public void DeleteSongs(string songName)
         {
-            if (Songs.Exists(s => s.Name.ToString().Trim() == name.Trim()))
+            if (Songs.Exists(s => s.Name.ToString().Trim() == songName.Trim()))
             {
-                Songs.RemoveAll(s => s.Name.ToString().Trim() == name.Trim());
+                Songs.RemoveAll(s => s.Name.ToString().Trim() == songName.Trim());
                 Duration = Songs.Aggregate(new TimeSpan(), (current, song) => current + song.Duration);
             }
             else
@@ -196,11 +195,11 @@ namespace Music
         {
             return Songs.Where(s=>s.Name.ToString().Trim()==songName.Trim()).ToList();
         }
-        public List<Song> OrderEnumeration()
+        public List<Song> GetSongsOrderly()
         {
             return Songs.OrderBy(x => x.Id).ToList();
         }
-        public List<Song> ShuffleEnumeration()
+        public List<Song> GetSongsRandomly()
         {
             return Songs.OrderBy(song=>Guid.NewGuid()).ToList();
         }
@@ -235,55 +234,239 @@ namespace Music
             {
                 throw new ArgumentNullException("newPlaylistName", "Cannot be null or empty. ");
             }
-            var combinedPlaylist =  new Playlist(newPlaylistName,firstPlaylist.OrderEnumeration().Union(secondPlaylist.OrderEnumeration()).ToList());
+            var combinedPlaylist =  new Playlist(newPlaylistName,firstPlaylist.GetSongsOrderly().Union(secondPlaylist.GetSongsOrderly()).ToList());
             AddPlaylist(combinedPlaylist);
+        }
+
+        public delegate void Playing(Song currentSong);
+        public event Playing StartPlaying;
+        public event Playing EndPlaying;
+
+        public void PlayOrderly(Playlist playlist)
+        {
+            if (playlist.Songs.Count == 0)
+            {
+                Console.WriteLine("The playlist is empty. There is nothing to play. ");
+                return;
+            }
+            PlayPlaylist(playlist.GetSongsOrderly(), playlist);
+        }
+        public void PlayRandomly(Playlist playlist)
+        {
+            if (playlist.Songs.Count == 0)
+            {
+                Console.WriteLine("The playlist is empty. There is nothing to play. ");
+                return;
+            }
+            var playingThread = new Task(() => PlayPlaylist(playlist.GetSongsRandomly(), playlist));
+            playingThread.RunSynchronously();
+            Task.WaitAll(playingThread);
+        }
+        private void PlayPlaylist(List<Song> songs,Playlist currentPlaylist)
+        {
+            TimeSpan totalPlaylistDuration = currentPlaylist.Duration;
+            StartPlaying += StartPlayingSong;
+            EndPlaying += EndPlayingSong;
+            while (totalPlaylistDuration != TimeSpan.Zero)
+            {
+                foreach (var song in songs)
+                {
+                    totalPlaylistDuration -= song.Duration;
+                    PlaySong(song);
+                }
+            }
+        }
+        private void PlaySong(Song currentSong)
+        {
+            if (StartPlaying == null || EndPlaying == null)
+            {
+                throw new ArgumentNullException("StartPlaying,EndPlaying", "Events cannot be null. ");
+            }
+            var firstTask = new Task(()=>StartPlaying(currentSong));
+            var secondTask =firstTask.ContinueWith(task => EndPlaying(currentSong));
+            firstTask.Start();
+            Task.WaitAll(firstTask,secondTask);
+        }
+        private void StartPlayingSong(Song song)
+        {
+            var playedSongDuration = (int) song.Duration.TotalSeconds;
+            Console.WriteLine(song.Name+" is playing now. ");
+            while (playedSongDuration != 0)
+            {
+                Console.Write("*"); 
+                Thread.Sleep(100);
+                playedSongDuration--;
+            }
+            Console.WriteLine();
+        }
+        private void EndPlayingSong(Song song)
+        {
+            Console.WriteLine(song.Name+" finishes playing. ");
         }
     }
 
     internal class Music
     {
+        private static Song CreateSong()
+        {
+            Console.WriteLine("Enter the name of a new song. ");
+            string name;
+            while (true)
+            {
+                if (String.IsNullOrWhiteSpace(name = Console.ReadLine()))
+                {
+                    Console.WriteLine("A bad value was entered, enter it again, please. ");
+                    continue;
+                }
+                break;
+            }
+            Console.WriteLine("Enter the duration (just minutes or minutes:seconds) of a new song. ");
+            TimeSpan duration;
+            while (true)
+            {
+                try
+                {
+                    duration = TimeSpan.Parse("00:" + Console.ReadLine());
+                    break;
+                }
+                catch (Exception)
+                {
+                    Console.WriteLine("A bad value was entered, enter it again, please. ");
+                }
+            }
+            Console.WriteLine("Enter the location of a new song. ");
+            string location;
+            while (true)
+            {
+                if (!String.IsNullOrWhiteSpace(location=@Console.ReadLine()))
+                {
+                    break;
+                }
+                Console.WriteLine("A bad value was entered, enter it again, please. ");
+            }
+            Console.WriteLine("Enter the genres (separated by comma) of a new song. (");
+            foreach (var g in Enum.GetValues(typeof(Song.AllGenres)))
+            {
+                Console.Write(g.ToString()+" ");
+            }
+            Console.Write(")");
+            Console.WriteLine();
+            while (true)
+            {
+                var inputString = Console.ReadLine().Trim().Split(',');
+                for (int i = 0; i < inputString.Length;)
+                {
+                    try
+                    {
+                        var inputGenre = (Song.AllGenres)Enum.Parse(typeof(Song.AllGenres),inputString[i]);
+                        string temporaryGenres = (i == inputString.Length - 1) ? inputString[i] + ", " : inputString[i];
+                        i++;
+                        if (i == inputString.Length)
+                        {
+                            var inputGenres = new Song.AllGenres[inputString.Length];
+                            for (int j = 0; j < inputString.Length; j++)
+                            {
+                                inputGenres[j] = (Song.AllGenres)Enum.Parse(typeof(Song.AllGenres), inputString[j]);
+                            }
+                            var song = new Song(name, duration, location, inputGenres);
+                            return song;
+                        }
+                    }
+                    catch (Exception)
+                    {
+                        Console.WriteLine("A {0} value isn`t allowed, enter it again, please. Letters are case, spaces are ignored. ", i + 1);
+                        inputString[i] = Console.ReadLine().Trim();
+                        continue;
+                    }
+                }
+                break;
+            }
+            return null;
+        }
+        private static Playlist CreatePlaylist(List<Song> songs)
+        {
+            Console.WriteLine("Enter the name of a new playlist. ");
+            string name;
+            while (true)
+            {
+                if (String.IsNullOrWhiteSpace(name = Console.ReadLine()))
+                {
+                    Console.WriteLine("A bad value was entered, enter it again, please. ");
+                    continue;
+                }
+                break;
+            }
+            while (true)
+            {
+                if (songs == null)
+                {
+                    Console.WriteLine("A bad value was entered, enter it again, please. ");
+                    continue;
+                }
+                break;
+            }
+            return new Playlist(name,songs);
+        }
+
         static void Main(string[] args)
         {
-            var obj = new Song("Riders on the storm", new TimeSpan(0,0,0,67), @"D:\", Song.AllGenres.Blues, Song.AllGenres.Classical);
-            var objj = new Song("Spiders", new TimeSpan(0, 0, 0, 67), @"D:\", Song.AllGenres.Blues, Song.AllGenres.Classical);
-            var obj2 = new Song("Riders ", new TimeSpan(0, 0, 0, 67), @"D:\", Song.AllGenres.Blues, Song.AllGenres.Classical);
-            var obj3 = new Song("Riders ", new TimeSpan(0, 0, 0, 67), @"D:\", Song.AllGenres.Blues, Song.AllGenres.Classical);
-
-            Console.WriteLine("Введите имя новой песни");
-            string name = Console.ReadLine();
-            Console.WriteLine("Введите продолжительность новой песни");
-            var duration = TimeSpan.Parse(Console.ReadLine());
-            Console.WriteLine("Введите расположение новой песни");
-            string location = Console.ReadLine();
-            Console.WriteLine("Введите жанры новой песни");
-            Enum.Parse(Console, Console.ReadLine());
-
-            //var l = new List<Song> {obj, objj,obj3,obj2};
-            //var l2 = new List<Song> {obj2, obj3};
-            //var p = new Playlist("PL1",l);
-            //var p2 = new Playlist("PL2", l2);
-
-            //var pl = new Player();
-            //pl.CombinePlaylists(p,p2,"PL3");
-            //foreach (var pk in pl.AddedPlaylists)
-            //{
-            //    pk.ShowSongsInfo();
-            //}
-
-
-            //Console.WriteLine();
-            //p.DeleteSong("Riders");
-            //Console.WriteLine();
-            //Console.WriteLine(p.Duration);
-            //var pl = new Player(p);
-           
-            
-            //Console.WriteLine();
-            //p.AddSongs(l2);
-            //p.ShowSongs();
-            //Console.WriteLine();
-            //Console.WriteLine(p.Duration);
-            Console.ReadKey();
+            var allSongs = new List<Song>();
+            var allPlaylists = new List<Playlist>();
+            var player = new Player();
+            while (true)
+            {
+                Console.WriteLine("Print 1 for creating a new song. ");
+                Console.WriteLine("Print 2 for creating a new playlist. ");
+                Console.WriteLine("Print 3 to see all the songs. ");
+                Console.WriteLine("Print 4 to see all the songs of playlist. ");
+                Console.WriteLine("Print 5 to play all the songs of playlist orderly. ");
+                Console.WriteLine("Print 6 to play all the songs of playlist randomly. ");
+                Console.WriteLine();
+                int choice;
+                Int32.TryParse(Console.ReadLine(), out choice);
+                switch (choice)
+                {
+                    case 1:
+                        {
+                            allSongs.Add(CreateSong());
+                            break;
+                        }
+                    case 2:
+                        {
+                            allPlaylists.Add(CreatePlaylist(allSongs));
+                            break;
+                        }
+                    case 3:
+                        {
+                            Console.WriteLine("id   name    duration  location");
+                            foreach (var s in allSongs)
+                            {
+                                Console.WriteLine(s.Id+" "+s.Name+" "+s.Duration+" "+s.Location);
+                            }
+                            break;
+                        }
+                    case 4:
+                        {
+                            allPlaylists[0].ShowSongsInfo();
+                            break;
+                        }
+                    case 5:
+                        {
+                            player.PlayOrderly(allPlaylists[0]);
+                            break;
+                        }
+                    case 6:
+                        {
+                            player.PlayRandomly(allPlaylists[0]);
+                            break;
+                        }
+                }
+                Console.WriteLine("Press 'esc' to exit or ant key to continue. ");
+                if (Console.ReadKey().Key == ConsoleKey.Escape)
+                {
+                    break;
+                }
+            }
         }
     }
 }
